@@ -1,1 +1,43 @@
-node_modules
+# Node modules
+node_modules/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Environment variables
+.env
+
+# Build output
+dist/
+build/
+
+# Coverage directory
+coverage/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional stylelint cache
+.stylelintcache
+
+# Backend specific
+restaurant-backend/node_modules/
+restaurant-backend/.env
+restaurant-backend/*.log
