@@ -32,7 +32,7 @@ const DrawerContent = ({ tenant, userRole, navigate, setDrawerOpen }) => {
       <Box sx={{ width: 280, p: 3, bgcolor: '#fff', height: '100%' }}>
         <Box sx={{ display: 'flex', alignItems: 'center', mb: 4 }}>
           <Avatar
-            src={tenant.logo_url ? `http://localhost:5000${tenant.logo_url}` : 'https://via.placeholder.com/40'}
+            src={tenant.logo_url ? `https://restaurant-backend-mmxx.onrender.com${tenant.logo_url}` : 'https://via.placeholder.com/40'}
             alt={tenant.name}
             sx={{ width: 48, height: 48, mr: 2, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}
             onError={(e) => { e.target.src = 'https://via.placeholder.com/40'; }}
