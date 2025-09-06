@@ -101,11 +101,11 @@ function Dashboard() {
 
     setAnalyticsLoading(true);
     try {
-      const response = await axios.get(`http://localhost:5000/api/tenants/${tenantId}/analytics`, {
+      const response = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/analytics`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       
-      const ordersResponse = await axios.get(`http://localhost:5000/api/tenants/${tenantId}/orders`, {
+      const ordersResponse = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/orders`, {
         headers: { Authorization: `Bearer ${token}` },
         params: { limit: 1000 }
       });
@@ -163,7 +163,7 @@ function Dashboard() {
     }
 
     try {
-      const response = await axios.get(`http://localhost:5000/api/tenants/${tenantId}/riders`, {
+      const response = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/riders`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       setRiders(Array.isArray(response.data) ? response.data : []);
@@ -180,7 +180,7 @@ function Dashboard() {
     setLoading(true);
     try {
       const params = { status: filterStatus, sortBy, sortOrder, search: searchQuery };
-      const response = await axios.get(`http://localhost:5000/api/tenants/${tenantId}/orders`, {
+      const response = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/orders`, {
         headers: { Authorization: `Bearer ${token}` },
         params,
       });
@@ -274,7 +274,7 @@ function Dashboard() {
     const fetchTenant = async () => {
       setTenantLoading(true);
       try {
-        const response = await axios.get(`http://localhost:5000/api/tenants/${tenantId}`, {
+        const response = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         console.log('Tenant API response:', response.data); // Debug log
@@ -298,7 +298,7 @@ function Dashboard() {
 
     const fetchMenuItems = async () => {
       try {
-        const response = await axios.get(`http://localhost:5000/api/tenants/${tenantId}/menu-items`, {
+        const response = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/menu-items`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         setMenuItems(Array.isArray(response.data) ? response.data : []);
@@ -362,7 +362,7 @@ function Dashboard() {
     };
 
     try {
-      const response = await axios.post(`http://localhost:5000/api/tenants/${tenantId}/orders`, orderData, {
+      const response = await axios.post(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/orders`, orderData, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (response.data.success) {
@@ -438,7 +438,7 @@ function Dashboard() {
     };
 
     try {
-      const response = await axios.put(`http://localhost:5000/api/tenants/${tenantId}/orders/${editOrder.order_id}`, orderData, {
+      const response = await axios.put(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/orders/${editOrder.order_id}`, orderData, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (response.data.success) {
@@ -489,7 +489,7 @@ function Dashboard() {
     };
 
     try {
-      const response = await axios.put(`http://localhost:5000/api/tenants/${tenantId}/orders/${orderId}`, orderData, {
+      const response = await axios.put(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/orders/${orderId}`, orderData, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (response.data.success) {
@@ -517,7 +517,7 @@ function Dashboard() {
     }
 
     try {
-      const response = await axios.put(`http://localhost:5000/api/tenants/${tenantId}/orders/${orderId}`, {
+      const response = await axios.put(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/orders/${orderId}`, {
         status: 'canceled',
       }, {
         headers: { Authorization: `Bearer ${token}` },
@@ -548,7 +548,7 @@ function Dashboard() {
 
     try {
       const params = { status: filterStatus, sortBy, sortOrder, search: searchQuery };
-      const response = await axios.get(`http://localhost:5000/api/tenants/${tenantId}/orders/export`, {
+      const response = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/orders/export`, {
         headers: { Authorization: `Bearer ${token}` },
         params,
         responseType: 'blob',

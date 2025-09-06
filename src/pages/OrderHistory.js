@@ -195,8 +195,8 @@ function OrderHistory() {
         return;
       }
       try {
-        console.log('Fetching tenant from:', `http://localhost:5000/api/tenants/${tenantId}`);
-        const response = await axios.get(`http://localhost:5000/api/tenants/${tenantId}`, {
+        console.log('Fetching tenant from:', `https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}`);
+        const response = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         console.log('Tenant response:', response.data);
@@ -227,8 +227,8 @@ function OrderHistory() {
       }
       setLoading(true);
       try {
-        console.log('Fetching order history from:', `http://localhost:5000/api/tenants/${tenantId}/order-history`);
-        const response = await axios.get(`http://localhost:5000/api/tenants/${tenantId}/order-history`, {
+        console.log('Fetching order history from:', `https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/order-history`);
+        const response = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/order-history`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         console.log('Order history response:', response.data);
@@ -434,7 +434,7 @@ function OrderHistory() {
           <GradientCard sx={{ mb: 4 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', p: 3 }}>
               <Avatar
-                src={tenant.logo_url ? `http://localhost:5000${tenant.logo_url}` : 'https://via.placeholder.com/40'}
+                src={tenant.logo_url ? `https://restaurant-backend-mmxx.onrender.com${tenant.logo_url}` : 'https://via.placeholder.com/40'}
                 alt={tenant.name}
                 sx={{ width: 48, height: 48, mr: 2, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}
                 onError={(e) => { e.target.src = 'https://via.placeholder.com/40'; }}

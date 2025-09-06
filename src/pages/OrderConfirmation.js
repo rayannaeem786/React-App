@@ -19,7 +19,7 @@ const OrderConfirmation = () => {
     // Fetch tenant details (optional, falls back to defaults)
     const fetchTenant = async () => {
       try {
-        const response = await axios.get(`http://localhost:5000/api/tenants/${tenantId}`);
+        const response = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}`);
         setTenant({
           name: response.data.name || `Tenant ${tenantId}`,
           logo_url: response.data.logo_url || '',
@@ -45,7 +45,7 @@ const OrderConfirmation = () => {
       try {
         setLoading(true);
         const response = await axios.get(
-          `http://localhost:5000/api/tenants/${tenantId}/public/orders/${orderId}/status`,
+          `https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/public/orders/${orderId}/status`,
           { params: { customerPhone: order.customer_phone } }
         );
         setOrder({
@@ -97,7 +97,7 @@ const OrderConfirmation = () => {
     setLoading(true);
     try {
       const response = await axios.get(
-        `http://localhost:5000/api/tenants/${tenantId}/public/orders/${orderId}/status`,
+        `https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/public/orders/${orderId}/status`,
         { params: { customerPhone: order.customer_phone } }
       );
       setOrder({

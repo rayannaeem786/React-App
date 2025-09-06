@@ -205,8 +205,8 @@ function Menu() {
         return;
       }
       try {
-        console.log('Fetching tenant from:', `http://localhost:5000/api/tenants/${tenantId}`);
-        const response = await axios.get(`http://localhost:5000/api/tenants/${tenantId}`, {
+        console.log('Fetching tenant from:', `https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}`);
+        const response = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         console.log('Tenant response:', response.data);
@@ -236,8 +236,8 @@ function Menu() {
       }
       setLoading(true);
       try {
-        console.log('Fetching menu items from:', `http://localhost:5000/api/tenants/${tenantId}/menu-items`);
-        const response = await axios.get(`http://localhost:5000/api/tenants/${tenantId}/menu-items`, {
+        console.log('Fetching menu items from:', `https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/menu-items`);
+        const response = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/menu-items`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         console.log('Menu items response:', response.data);
@@ -319,7 +319,7 @@ function Menu() {
     setLoading(true);
     try {
       console.log('Adding menu item with data:', itemData);
-      const response = await axios.post(`http://localhost:5000/api/tenants/${tenantId}/menu-items`, itemData, {
+      const response = await axios.post(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/menu-items`, itemData, {
         headers: { 
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -327,7 +327,7 @@ function Menu() {
       });
       console.log('Add menu item response:', response.data);
       if (response.data.success) {
-        const updatedItems = await axios.get(`http://localhost:5000/api/tenants/${tenantId}/menu-items`, {
+        const updatedItems = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/menu-items`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         setMenuItems(updatedItems.data || []);
@@ -405,7 +405,7 @@ function Menu() {
     setLoading(true);
     try {
       console.log('Updating menu item with data:', itemData);
-      const response = await axios.put(`http://localhost:5000/api/tenants/${tenantId}/menu-items/${editItem.item_id}`, itemData, {
+      const response = await axios.put(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/menu-items/${editItem.item_id}`, itemData, {
         headers: { 
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -413,7 +413,7 @@ function Menu() {
       });
       console.log('Update menu item response:', response.data);
       if (response.data.success) {
-        const updatedItems = await axios.get(`http://localhost:5000/api/tenants/${tenantId}/menu-items`, {
+        const updatedItems = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/menu-items`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         setMenuItems(updatedItems.data || []);
@@ -452,12 +452,12 @@ function Menu() {
     setLoading(true);
     try {
       console.log('Deleting menu item ID:', itemId);
-      const response = await axios.delete(`http://localhost:5000/api/tenants/${tenantId}/menu-items/${itemId}`, {
+      const response = await axios.delete(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/menu-items/${itemId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       console.log('Delete menu item response:', response.data);
       if (response.data.success) {
-        const updatedItems = await axios.get(`http://localhost:5000/api/tenants/${tenantId}/menu-items`, {
+        const updatedItems = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/menu-items`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         setMenuItems(updatedItems.data || []);
@@ -498,13 +498,13 @@ function Menu() {
     setLoading(true);
     try {
       console.log('Restocking menu item ID:', itemId, 'with quantity:', restockQuantity);
-      const response = await axios.patch(`http://localhost:5000/api/tenants/${tenantId}/menu-items/${itemId}/restock`, 
+      const response = await axios.patch(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/menu-items/${itemId}/restock`, 
         { quantity: parseInt(restockQuantity) }, 
         { headers: { Authorization: `Bearer ${token}` } }
       );
       console.log('Restock response:', response.data);
       if (response.data.success) {
-        const updatedItems = await axios.get(`http://localhost:5000/api/tenants/${tenantId}/menu-items`, {
+        const updatedItems = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/menu-items`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         setMenuItems(updatedItems.data || []);

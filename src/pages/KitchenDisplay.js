@@ -232,7 +232,7 @@ function KitchenDisplay() {
 
     const fetchTenant = async () => {
       try {
-        const response = await axios.get(`http://localhost:5000/api/tenants/${tenantId}`, {
+        const response = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         setTenant({
@@ -253,7 +253,7 @@ function KitchenDisplay() {
     const fetchOrders = async () => {
       setLoading(true);
       try {
-        const response = await axios.get(`http://localhost:5000/api/tenants/${tenantId}/orders`, {
+        const response = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/orders`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         // Filter for preparation stages (pending and preparing)
@@ -308,11 +308,11 @@ function KitchenDisplay() {
     };
 
     try {
-      const response = await axios.put(`http://localhost:5000/api/tenants/${tenantId}/orders/${orderId}`, orderData, {
+      const response = await axios.put(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/orders/${orderId}`, orderData, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (response.data.success) {
-        const updatedOrders = await axios.get(`http://localhost:5000/api/tenants/${tenantId}/orders`, {
+        const updatedOrders = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/orders`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         setOrders(updatedOrders.data.filter(o => ['pending', 'preparing'].includes(o.status)));
@@ -399,7 +399,7 @@ function KitchenDisplay() {
           <GradientCard sx={{ mb: 4 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', p: 3 }}>
               <Avatar
-                src={tenant.logo_url ? `http://localhost:5000${tenant.logo_url}` : 'https://via.placeholder.com/40'}
+                src={tenant.logo_url ? `https://restaurant-backend-mmxx.onrender.com${tenant.logo_url}` : 'https://via.placeholder.com/40'}
                 alt={tenant.name}
                 sx={{ width: 48, height: 48, mr: 2, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}
                 onError={(e) => { e.target.src = 'https://via.placeholder.com/40'; }}

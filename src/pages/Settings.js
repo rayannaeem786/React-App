@@ -175,7 +175,7 @@ function Settings() {
       }
       setLoading(true);
       try {
-        const response = await axios.get(`http://localhost:5000/api/tenants/${tenantId}`, {
+        const response = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         setTenant({
@@ -223,7 +223,7 @@ function Settings() {
 
     setLoading(true);
     try {
-      const response = await axios.put(`http://localhost:5000/api/tenants/${tenantId}`, formData, {
+      const response = await axios.put(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}`, formData, {
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'multipart/form-data',
@@ -232,7 +232,7 @@ function Settings() {
       if (response.data.success) {
         setSuccess('Settings updated successfully!');
         setError('');
-        const tenantResponse = await axios.get(`http://localhost:5000/api/tenants/${tenantId}`, {
+        const tenantResponse = await axios.get(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         setTenant({
@@ -358,7 +358,7 @@ function Settings() {
             }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
                 {tenant.logo_url && (
-                  <StyledAvatar src={`http://localhost:5000${tenant.logo_url}`} alt={tenant.name} />
+                  <StyledAvatar src={`https://restaurant-backend-mmxx.onrender.com${tenant.logo_url}`} alt={tenant.name} />
                 )}
                 <Typography variant="h5" sx={{ 
                   fontWeight: 600, 

@@ -145,8 +145,8 @@ function Login() {
     setLoading(true);
     setError('');
     try {
-      const response = await axios.post('http://localhost:5000/api/login', {
-        tenantId: tenantId.trim() || undefined, // Send undefined if empty
+const response = await axios.post('https://restaurant-backend-mmxx.onrender.com/api/login', {
+          tenantId: tenantId.trim() || undefined, // Send undefined if empty
         username: username.trim(),
         password,
       });

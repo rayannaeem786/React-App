@@ -156,8 +156,8 @@ function SuperAdmin() {
     }
     setLoading(true);
     try {
-      console.log('Fetching tenants from:', 'http://localhost:5000/api/tenants');
-      const response = await axios.get('http://localhost:5000/api/tenants', {
+      console.log('Fetching tenants from:', 'https://restaurant-backend-mmxx.onrender.com/api/tenants');
+      const response = await axios.get('https://restaurant-backend-mmxx.onrender.com/api/tenants', {
         headers: { Authorization: `Bearer ${token}` },
       });
       console.log('Tenants response:', response.data);
@@ -203,7 +203,7 @@ function SuperAdmin() {
         managerUsername: newManagerUsername,
         managerPassword: newManagerPassword,
       });
-      const response = await axios.post('http://localhost:5000/api/tenants', {
+      const response = await axios.post('https://restaurant-backend-mmxx.onrender.com/api/tenants', {
         name: newTenantName.trim(),
         managerUsername: newManagerUsername.trim(),
         managerPassword: newManagerPassword,
@@ -237,7 +237,7 @@ function SuperAdmin() {
     setLoading(true);
     try {
       console.log(`Updating tenant ID ${tenantId} to blocked: ${blocked}`);
-      const response = await axios.put(`http://localhost:5000/api/tenants/${tenantId}/block`, { blocked }, {
+      const response = await axios.put(`https://restaurant-backend-mmxx.onrender.com/api/tenants/${tenantId}/block`, { blocked }, {
         headers: { Authorization: `Bearer ${token}` },
       });
       console.log('Block tenant response:', response.data);

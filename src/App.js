@@ -39,7 +39,7 @@ function ProtectedRoute({ allowedRoles, redirectTo, children }) {
 
     // Check tenant blocked status for non-superadmin users
     if (userRole !== 'superadmin') {
-      axios.get(`http://localhost:5000/api/tenants/${tenantId}`, {
+axios.get(`${process.env.REACT_APP_API_URL}/api/tenants/${tenantId}`, {
         headers: { Authorization: `Bearer ${token}` }
       })
         .then(response => {
