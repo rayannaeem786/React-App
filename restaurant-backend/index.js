@@ -8,12 +8,66 @@ const path = require('path');
 const fs = require('fs');
 const WebSocket = require('ws');
 const crypto = require('crypto');
+const winston = require('winston');
+const rateLimit = require('express-rate-limit');
+const sanitizeFilename = require('sanitize-filename');
 require('dotenv').config();
 
-const orderRoutes = require('./orders'); // Import order routes
+const orderRoutes = require('./orders');
+
+// Initialize logger with sensitive data masking
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format((info) => {
+      // Mask sensitive fields
+      if (info.username) {
+        info.username = '****';
+      }
+      if (info.customerPhone) {
+        info.customerPhone = '****';
+      }
+      return info;
+    })(),
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.File({ filename: 'error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'combined.log' })
+  ]
+});
+
+// Environment variable validation
+const requiredEnvVars = ['JWT_SECRET', 'DB_HOST', 'DB_USER', 'DB_NAME'];
+for (const envVar of requiredEnvVars) {
+  if (!process.env[envVar]) {
+    logger.error(`Missing required environment variable: ${envVar}`);
+    process.exit(1);
+  }
+}
+
+const JWT_SECRET = process.env.JWT_SECRET;
+const SALT_ROUNDS = parseInt(process.env.BCRYPT_SALT_ROUNDS) || 10;
+const PORT = process.env.PORT || 5000;
+const WS_PORT = process.env.WS_PORT || 8080;
+const allowedOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : [];
+if (allowedOrigins.length === 0) {
+  logger.error('No CORS origins configured. Server will not start.');
+  process.exit(1);
+}
 
 const app = express();
-app.use(cors({ origin: 'http://localhost:3000' }));
+app.use(cors({
+  origin: (origin, callback) => {
+    if (allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      logger.error('CORS request rejected', { origin });
+      callback(new Error('Not allowed by CORS'));
+    }
+  }
+}));
 app.use(express.json());
 
 // Serve static files (logos)
@@ -30,7 +84,13 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname);
-    cb(null, `${req.params.tenantId}-${Date.now()}${ext}`);
+    // Validate tenantId to prevent traversal or invalid characters
+    const safeTenantId = req.params.tenantId.replace(/[^a-zA-Z0-9-]/g, '');
+    if (!safeTenantId) {
+      return cb(new Error('Invalid tenant ID'));
+    }
+    const sanitizedName = sanitizeFilename(`${safeTenantId}-${Date.now()}${ext}`);
+    cb(null, sanitizedName);
   },
 });
 const upload = multer({
@@ -40,42 +100,103 @@ const upload = multer({
     const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = filetypes.test(file.mimetype);
     if (extname && mimetype) {
-      return cb(null, true);
+      cb(null, true);
+    } else {
+      cb(new Error('Only .jpg, .jpeg, .png files are allowed'));
     }
-    cb(new Error('Only .jpg, .jpeg, .png files are allowed'));
   },
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
 });
 
 // MySQL connection
 const pool = mysql.createPool({
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
   password: process.env.DB_PASSWORD || '',
-  database: process.env.DB_NAME || 'restaurant_software',
+  database: process.env.DB_NAME,
+  connectionLimit: process.env.DB_CONNECTION_LIMIT || 10,
+  queueLimit: 0
 });
 
-// JWT secret
-const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key';
-
 // WebSocket server setup
-const wss = new WebSocket.Server({ port: 8080 });
+const wss = new WebSocket.Server({ port: WS_PORT });
 const clients = new Map(); // For staff: tenantId -> Set<ws>
 const orderClients = new Map(); // For customers: orderId -> Set<ws>
 
-wss.on('connection', (ws, req) => {
-  const urlParams = new URLSearchParams(req.url.split('?')[1]);
-  const tenantId = urlParams.get('tenantId');
-  const token = urlParams.get('token');
-  const orderId = urlParams.get('orderId');
-  const customerPhone = urlParams.get('customerPhone');
+// In-memory rate limiter for WebSocket connections
+const wsRateLimitMap = new Map();
+const WS_RATE_LIMIT = { max: 10, windowMs: 15 * 60 * 1000 }; // 10 connections per 15 minutes per IP
 
-  console.log('WebSocket connection attempt:', { tenantId, token: token ? 'provided' : 'missing', orderId, customerPhone });
+// Phone number regex (basic validation, adjust as needed)
+const phoneRegex = /^\+?\d{10,15}$/;
+
+// Periodic cleanup of stale WebSocket connections
+setInterval(() => {
+  clients.forEach((clientSet, tenantId) => {
+    clientSet.forEach(ws => {
+      if (ws.readyState === WebSocket.CLOSED) {
+        clientSet.delete(ws);
+      }
+    });
+    if (clientSet.size === 0) {
+      clients.delete(tenantId);
+    }
+  });
+  orderClients.forEach((clientSet, orderId) => {
+    clientSet.forEach(ws => {
+      if (ws.readyState === WebSocket.CLOSED) {
+        clientSet.delete(ws);
+      }
+    });
+    if (clientSet.size === 0) {
+      orderClients.delete(orderId);
+    }
+  });
+}, 60000); // Run every minute
+
+wss.on('connection', (ws, req) => {
+  let tenantId, token, orderId, customerPhone;
+  try {
+    const url = new URL(req.url, `ws://${req.headers.host}`);
+    tenantId = url.searchParams.get('tenantId');
+    token = url.searchParams.get('token');
+    orderId = url.searchParams.get('orderId');
+    customerPhone = url.searchParams.get('customerPhone');
+
+    // Rate-limit WebSocket connections by client IP
+    const clientIp = req.socket.remoteAddress;
+    const now = Date.now();
+    if (!wsRateLimitMap.has(clientIp)) {
+      wsRateLimitMap.set(clientIp, { count: 0, resetTime: now + WS_RATE_LIMIT.windowMs });
+    }
+    const rateLimitData = wsRateLimitMap.get(clientIp);
+    if (now > rateLimitData.resetTime) {
+      rateLimitData.count = 0;
+      rateLimitData.resetTime = now + WS_RATE_LIMIT.windowMs;
+    }
+    if (rateLimitData.count >= WS_RATE_LIMIT.max) {
+      logger.error('WebSocket connection rejected: Rate limit exceeded', { clientIp });
+      ws.close(1008, 'Too many connection attempts');
+      return;
+    }
+    rateLimitData.count++;
+
+    // Validate customer phone format
+    if (customerPhone && !phoneRegex.test(customerPhone)) {
+      logger.error('WebSocket connection rejected: Invalid phone format', { tenantId, orderId });
+      ws.close(1008, 'Invalid phone format');
+      return;
+    }
+  } catch (error) {
+    logger.error('WebSocket connection rejected: Invalid URL', { error: error.message });
+    ws.close(1008, 'Invalid URL');
+    return;
+  }
 
   if (token) {
     // Staff connection logic
     if (!tenantId) {
-      console.error('WebSocket connection rejected: Missing tenantId');
+      logger.error('WebSocket connection rejected: Missing tenantId');
       ws.close(1008, 'Tenant ID required');
       return;
     }
@@ -83,7 +204,7 @@ wss.on('connection', (ws, req) => {
     try {
       const decoded = jwt.verify(token, JWT_SECRET);
       if (decoded.tenantId !== tenantId || !['manager', 'kitchen', 'rider'].includes(decoded.role)) {
-        console.error('WebSocket connection rejected: Unauthorized', { tenantId, role: decoded.role });
+        logger.error('WebSocket connection rejected: Unauthorized', { tenantId, role: decoded.role });
         ws.close(1008, 'Unauthorized');
         return;
       }
@@ -92,10 +213,8 @@ wss.on('connection', (ws, req) => {
         clients.set(tenantId, new Set());
       }
       clients.get(tenantId).add(ws);
-      console.log('WebSocket staff client connected:', { tenantId, role: decoded.role });
 
       ws.on('close', () => {
-        console.log('WebSocket staff client disconnected:', { tenantId });
         clients.get(tenantId)?.delete(ws);
         if (clients.get(tenantId)?.size === 0) {
           clients.delete(tenantId);
@@ -103,10 +222,10 @@ wss.on('connection', (ws, req) => {
       });
 
       ws.on('error', (error) => {
-        console.error('WebSocket staff error:', { tenantId, error: error.message });
+        logger.error('WebSocket staff error:', { tenantId, error: error.message });
       });
     } catch (error) {
-      console.error('WebSocket connection rejected: Invalid token', { error: error.message });
+      logger.error('WebSocket connection rejected: Invalid token', { error: error.message });
       ws.close(1008, 'Invalid token');
     }
   } else if (tenantId && orderId && customerPhone) {
@@ -118,7 +237,7 @@ wss.on('connection', (ws, req) => {
           [orderId, tenantId, customerPhone]
         );
         if (orders.length === 0) {
-          console.error('WebSocket public connection rejected: Invalid order or phone', { tenantId, orderId });
+          logger.error('WebSocket public connection rejected: Invalid order or phone', { tenantId, orderId });
           ws.close(1008, 'Invalid order or phone');
           return;
         }
@@ -129,10 +248,8 @@ wss.on('connection', (ws, req) => {
           orderClients.set(fullOrderId, new Set());
         }
         orderClients.get(fullOrderId).add(ws);
-        console.log('WebSocket public client connected:', { tenantId, orderId });
 
         ws.on('close', () => {
-          console.log('WebSocket public client disconnected:', { tenantId, orderId });
           orderClients.get(fullOrderId)?.delete(ws);
           if (orderClients.get(fullOrderId)?.size === 0) {
             orderClients.delete(fullOrderId);
@@ -140,33 +257,29 @@ wss.on('connection', (ws, req) => {
         });
 
         ws.on('error', (error) => {
-          console.error('WebSocket public error:', { tenantId, orderId, error: error.message });
+          logger.error('WebSocket public error:', { tenantId, orderId, error: error.message });
         });
       } catch (error) {
-        console.error('Error verifying public WebSocket:', { error: error.message });
+        logger.error('Error verifying public WebSocket:', { error: error.message });
         ws.close(1008, 'Server error');
       }
     })();
   } else {
-    console.error('WebSocket connection rejected: Missing parameters');
+    logger.error('WebSocket connection rejected: Missing parameters');
     ws.close(1008, 'Tenant ID, and either token or (orderId and customerPhone) required');
   }
 });
 
 const broadcastOrderNotification = async (tenantId, order, messageType = 'new_order') => {
-  console.log('Broadcasting order notification:', { tenantId, messageType, orderId: order.order_id });
   try {
     const [rows] = await pool.query('SELECT item_id, name, price FROM menu_items WHERE tenant_id = ?', [tenantId]);
-    const menuItems = rows.reduce((acc, item) => {
-      acc[item.item_id] = { name: item.name, price: parseFloat(item.price) };
-      return acc;
-    }, {});
+    const menuItems = new Map(rows.map(item => [item.item_id, { name: item.name, price: parseFloat(item.price) }]));
 
     const orderDetails = order.items.map(item => ({
       item_id: item.item_id,
-      name: menuItems[item.item_id]?.name || item.name || 'Unknown Item', // Changed from item to name
+      name: menuItems.get(item.item_id)?.name || item.name || 'Unknown Item',
       quantity: item.quantity,
-      price: menuItems[item.item_id]?.price || parseFloat(item.price),
+      price: menuItems.get(item.item_id)?.price || parseFloat(item.price),
     }));
 
     const message = JSON.stringify({
@@ -195,8 +308,6 @@ const broadcastOrderNotification = async (tenantId, order, messageType = 'new_or
           client.send(message);
         }
       });
-    } else {
-      console.log('No staff WebSocket clients for tenant:', tenantId);
     }
 
     // Send to customer(s) for this order
@@ -206,11 +317,9 @@ const broadcastOrderNotification = async (tenantId, order, messageType = 'new_or
           client.send(message);
         }
       });
-    } else {
-      console.log('No customer WebSocket clients for order:', order.order_id);
     }
   } catch (error) {
-    console.error('Error broadcasting order notification:', { error: error.message, tenantId, orderId: order.order_id });
+    logger.error('Error broadcasting order notification:', { error: error.message, tenantId, orderId: order.order_id });
   }
 };
 
@@ -219,7 +328,7 @@ const authenticateToken = async (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
   if (!token) {
-    console.error('Authentication failed: No token provided');
+    logger.error('Authentication failed: No token provided');
     return res.status(401).json({ error: 'Access token required' });
   }
 
@@ -228,7 +337,7 @@ const authenticateToken = async (req, res, next) => {
     req.user = decoded;
     next();
   } catch (error) {
-    console.error('JWT verification error:', { error: error.message, token });
+    logger.error('JWT verification error:', { error: error.message });
     res.status(403).json({ error: 'Invalid or expired token' });
   }
 };
@@ -236,7 +345,7 @@ const authenticateToken = async (req, res, next) => {
 // Middleware to restrict to managers
 const restrictToManager = (req, res, next) => {
   if (req.user.role !== 'manager') {
-    console.error('Access denied: Manager role required', { user: req.user });
+    logger.error('Access denied: Manager role required', { user: req.user });
     return res.status(403).json({ error: 'Manager access required' });
   }
   next();
@@ -245,7 +354,7 @@ const restrictToManager = (req, res, next) => {
 // Middleware to restrict to superadmin
 const restrictToSuperAdmin = (req, res, next) => {
   if (req.user.role !== 'superadmin') {
-    console.error('Access denied: Superadmin role required', { user: req.user });
+    logger.error('Access denied: Superadmin role required', { user: req.user });
     return res.status(403).json({ error: 'Superadmin access required' });
   }
   next();
@@ -254,7 +363,7 @@ const restrictToSuperAdmin = (req, res, next) => {
 // Middleware to restrict to managers or kitchen staff
 const restrictToManagerOrKitchen = (req, res, next) => {
   if (!['manager', 'kitchen'].includes(req.user.role)) {
-    console.error('Access denied: Manager or kitchen role required', { user: req.user });
+    logger.error('Access denied: Manager or kitchen role required', { user: req.user });
     return res.status(403).json({ error: 'Manager or kitchen access required' });
   }
   next();
@@ -263,7 +372,7 @@ const restrictToManagerOrKitchen = (req, res, next) => {
 // Middleware to restrict to riders
 const restrictToRider = (req, res, next) => {
   if (req.user.role !== 'rider') {
-    console.error('Access denied: Rider role required', { user: req.user });
+    logger.error('Access denied: Rider role required', { user: req.user });
     return res.status(403).json({ error: 'Rider access required' });
   }
   next();
@@ -275,7 +384,7 @@ const restrictToManagerKitchenOrRider = async (req, res, next) => {
   const { status } = req.body;
 
   if (!['manager', 'kitchen', 'rider'].includes(req.user.role)) {
-    console.error('Access denied: Manager, kitchen, or rider role required', { user: req.user });
+    logger.error('Access denied: Manager, kitchen, or rider role required', { user: req.user });
     return res.status(403).json({ error: 'Manager, kitchen, or rider access required' });
   }
 
@@ -286,7 +395,7 @@ const restrictToManagerKitchenOrRider = async (req, res, next) => {
         [orderId, tenantId]
       );
       if (orders.length === 0) {
-        console.error('Order not found:', { tenantId, orderId });
+        logger.error('Order not found:', { tenantId, orderId });
         return res.status(404).json({ error: 'Order not found' });
       }
       const order = orders[0];
@@ -299,7 +408,7 @@ const restrictToManagerKitchenOrRider = async (req, res, next) => {
       if (status === 'delivered' && order.status === 'enroute' && order.rider_id === req.user.userId) {
         return next();
       }
-      console.error('Access denied: Rider not authorized for this action', {
+      logger.error('Access denied: Rider not authorized for this action', {
         tenantId,
         orderId,
         userId: req.user.userId,
@@ -309,8 +418,8 @@ const restrictToManagerKitchenOrRider = async (req, res, next) => {
       });
       return res.status(403).json({ error: 'Rider not authorized to update this order' });
     } catch (error) {
-      console.error('Error checking rider permissions:', { error: error.message, tenantId, orderId });
-      return res.status(500).json({ error: 'Server error checking permissions', details: error.message });
+      logger.error('Error checking rider permissions:', { error: error.message, tenantId, orderId });
+      return res.status(500).json({ error: 'Internal server error' });
     }
   }
 
@@ -318,24 +427,49 @@ const restrictToManagerKitchenOrRider = async (req, res, next) => {
   next();
 };
 
+// Rate limit for login endpoint
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5,
+  message: 'Too many login attempts, please try again later'
+});
+
+// Rate limiter for public endpoints
+const publicLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // 100 requests per IP
+  message: 'Too many requests from this IP, please try again later'
+});
+
+// Middleware to validate tenantId format
+const validateTenantId = (req, res, next) => {
+  const { tenantId } = req.params;
+  if (tenantId && !/^[a-zA-Z0-9-]{1,36}$/.test(tenantId)) {
+    logger.error('Invalid tenant ID format:', { tenantId });
+    return res.status(400).json({ error: 'Invalid tenant ID' });
+  }
+  next();
+};
+
+// Apply to all routes with tenantId
+app.use('/api/tenants/:tenantId', validateTenantId);
+
 // Login endpoint
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', loginLimiter, async (req, res) => {
   let { tenantId, username, password } = req.body;
-  console.log('Login attempt:', { tenantId, username });
   try {
     // Check if tenant is blocked when tenantId is provided
     if (tenantId) {
       const [tenants] = await pool.query('SELECT tenant_id, blocked FROM tenants WHERE tenant_id = ?', [tenantId]);
       if (tenants.length === 0) {
-        console.error('Login failed: Tenant not found', { tenantId, username });
+        logger.error('Login failed: Tenant not found', { tenantId });
         return res.status(404).json({ error: 'Tenant not found' });
       }
       const tenant = tenants[0];
       if (tenant.blocked === 1) {
-        console.error('Login failed: Tenant is blocked', { tenantId, username });
+        logger.error('Login failed: Tenant is blocked', { tenantId });
         return res.status(403).json({ error: 'Your Account Is Suspended By SuperAdmin So Please Contact The Administration.' });
       }
-      console.log('Tenant check passed:', { tenantId, blocked: tenant.blocked });
     }
 
     // Query user based on tenantId and username
@@ -347,17 +481,16 @@ app.post('/api/login', async (req, res) => {
     }
 
     if (users.length === 0) {
-      console.error('Login failed: User not found', { tenantId, username });
+      logger.error('Login failed: User not found', { tenantId });
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
     const user = users[0];
-    console.log('User found:', { tenantId, username, role: user.role });
 
     // Verify password
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      console.error('Login failed: Incorrect password', { tenantId, username });
+      logger.error('Login failed: Incorrect password', { tenantId });
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
@@ -367,11 +500,10 @@ app.post('/api/login', async (req, res) => {
       JWT_SECRET,
       { expiresIn: '1h' }
     );
-    console.log('Login successful:', { tenantId: user.tenant_id, username, role: user.role });
     res.json({ token, role: user.role, userId: user.user_id });
   } catch (error) {
-    console.error('Login error:', { error: error.message, tenantId, username });
-    res.status(500).json({ error: 'Server error during login', details: error.message });
+    logger.error('Login error:', { error: error.message, tenantId });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -381,8 +513,8 @@ app.get('/api/tenants', authenticateToken, restrictToSuperAdmin, async (req, res
     const [tenants] = await pool.query('SELECT tenant_id, name, logo_url, primary_color, blocked, created_at FROM tenants');
     res.json(tenants);
   } catch (error) {
-    console.error('Error fetching tenants:', { error: error.message });
-    res.status(500).json({ error: 'Failed to fetch tenants', details: error.message });
+    logger.error('Error fetching tenants:', { error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -394,7 +526,7 @@ app.post('/api/tenants', authenticateToken, restrictToSuperAdmin, async (req, re
   }
 
   const tenantId = crypto.randomUUID();
-  const hashedPassword = await bcrypt.hash(managerPassword, 10);
+  const hashedPassword = await bcrypt.hash(managerPassword, SALT_ROUNDS);
 
   const connection = await pool.getConnection();
   try {
@@ -411,8 +543,8 @@ app.post('/api/tenants', authenticateToken, restrictToSuperAdmin, async (req, re
     res.json({ success: true, tenantId });
   } catch (error) {
     await connection.rollback();
-    console.error('Error creating tenant:', { error: error.message });
-    res.status(500).json({ error: 'Failed to create tenant', details: error.message });
+    logger.error('Error creating tenant:', { error: error.message });
+    res.status(500).json({ error: 'Internal server error' });
   } finally {
     connection.release();
   }
@@ -436,8 +568,8 @@ app.put('/api/tenants/:tenantId/block', authenticateToken, restrictToSuperAdmin,
     }
     res.json({ success: true });
   } catch (error) {
-    console.error('Error updating tenant block status:', { error: error.message, tenantId });
-    res.status(500).json({ error: 'Failed to update tenant', details: error.message });
+    logger.error('Error updating tenant block status:', { error: error.message, tenantId });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -445,21 +577,36 @@ app.put('/api/tenants/:tenantId/block', authenticateToken, restrictToSuperAdmin,
 app.get('/api/tenants/:tenantId', authenticateToken, async (req, res) => {
   const { tenantId } = req.params;
   if (req.user.tenantId !== tenantId) {
-    console.error('Unauthorized tenant access:', { tenantId, user: req.user });
+    logger.error('Unauthorized tenant access:', { tenantId, user: req.user });
     return res.status(403).json({ error: 'Unauthorized tenant' });
   }
 
   try {
     const [tenants] = await pool.query('SELECT name, logo_url, primary_color FROM tenants WHERE tenant_id = ?', [tenantId]);
     if (tenants.length === 0) {
-      console.error('Tenant not found:', { tenantId });
+      logger.error('Tenant not found:', { tenantId });
       return res.status(404).json({ error: 'Tenant not found' });
     }
-    console.log('Tenant fetched:', { tenantId, data: tenants[0] });
     res.json(tenants[0]);
   } catch (error) {
-    console.error('Error fetching tenant:', { error: error.message, tenantId });
-    res.status(500).json({ error: 'Server error', details: error.message });
+    logger.error('Error fetching tenant:', { error: error.message, tenantId });
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get tenant details (public)
+app.get('/api/tenants/:tenantId/public', publicLimiter, async (req, res) => {
+  const { tenantId } = req.params;
+  try {
+    const [tenants] = await pool.query('SELECT name, logo_url, primary_color FROM tenants WHERE tenant_id = ?', [tenantId]);
+    if (tenants.length === 0) {
+      logger.error('Tenant not found:', { tenantId });
+      return res.status(404).json({ error: 'Tenant not found' });
+    }
+    res.json(tenants[0]);
+  } catch (error) {
+    logger.error('Error fetching public tenant:', { error: error.message, tenantId });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -467,11 +614,10 @@ app.get('/api/tenants/:tenantId', authenticateToken, async (req, res) => {
 app.get('/api/tenants/:tenantId/riders', authenticateToken, restrictToManagerOrKitchen, async (req, res) => {
   const { tenantId } = req.params;
   if (req.user.tenantId !== tenantId) {
-    console.error('Unauthorized tenant access:', { tenantId, user: req.user });
+    logger.error('Unauthorized tenant access:', { tenantId, user: req.user });
     return res.status(403).json({ error: 'Unauthorized tenant' });
   }
 
-  console.log('Fetching riders for tenant:', { tenantId });
   try {
     const [riders] = await pool.query(
       'SELECT u.user_id, u.username, COUNT(o.order_id) as active_orders ' +
@@ -486,11 +632,10 @@ app.get('/api/tenants/:tenantId/riders', authenticateToken, restrictToManagerOrK
       username: rider.username,
       is_available: rider.active_orders === 0,
     }));
-    console.log('Riders fetched:', { tenantId, count: formattedRiders.length });
     res.json(formattedRiders);
   } catch (error) {
-    console.error('Error fetching riders:', { error: error.message, tenantId });
-    res.status(500).json({ error: 'Failed to fetch riders', details: error.message });
+    logger.error('Error fetching riders:', { error: error.message, tenantId });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -498,11 +643,10 @@ app.get('/api/tenants/:tenantId/riders', authenticateToken, restrictToManagerOrK
 app.get('/api/tenants/:tenantId/menu-items', authenticateToken, async (req, res) => {
   const { tenantId } = req.params;
   if (req.user.tenantId !== tenantId) {
-    console.error('Unauthorized tenant access:', { tenantId, user: req.user });
+    logger.error('Unauthorized tenant access:', { tenantId, user: req.user });
     return res.status(403).json({ error: 'Unauthorized tenant' });
   }
 
-  console.log('Fetching menu items for tenant:', { tenantId });
   try {
     const [items] = await pool.query(
       'SELECT item_id, name, category, price, stock_quantity, low_stock_threshold, created_at FROM menu_items WHERE tenant_id = ?',
@@ -517,18 +661,16 @@ app.get('/api/tenants/:tenantId/menu-items', authenticateToken, async (req, res)
       low_stock_threshold: parseInt(item.low_stock_threshold),
       created_at: item.created_at,
     }));
-    console.log('Menu items fetched:', { tenantId, count: formattedItems.length });
     res.json(formattedItems);
   } catch (error) {
-    console.error('Error fetching menu items:', { error: error.message, tenantId });
-    res.status(500).json({ error: 'Server error', details: error.message });
+    logger.error('Error fetching menu items:', { error: error.message, tenantId });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // Get menu items (public)
-app.get('/api/tenants/:tenantId/public/menu', async (req, res) => {
+app.get('/api/tenants/:tenantId/public/menu', publicLimiter, async (req, res) => {
   const { tenantId } = req.params;
-  console.log('Fetching public menu for tenant:', { tenantId });
   try {
     const [items] = await pool.query(
       'SELECT item_id, name, category, price, stock_quantity FROM menu_items WHERE tenant_id = ?',
@@ -541,69 +683,76 @@ app.get('/api/tenants/:tenantId/public/menu', async (req, res) => {
       price: parseFloat(item.price),
       stock_quantity: parseInt(item.stock_quantity),
     }));
-    console.log('Public menu items fetched:', { tenantId, count: formattedItems.length });
     res.json(formattedItems);
   } catch (error) {
-    console.error('Error fetching public menu:', { error: error.message, tenantId });
-    res.status(500).json({ error: 'Server error', details: error.message });
+    logger.error('Error fetching public menu:', { error: error.message, tenantId });
+    res.status(500).json({ error: 'Internal server error' });
   }
+});
+
+// Input validation for menu items
+const Joi = require('joi');
+const menuItemSchema = Joi.object({
+  name: Joi.string().required(),
+  category: Joi.string().required(),
+  price: Joi.number().min(0).required(),
+  stock_quantity: Joi.number().integer().min(0).optional(),
+  low_stock_threshold: Joi.number().integer().min(0).optional()
 });
 
 // Create menu item (manager only)
 app.post('/api/tenants/:tenantId/menu-items', authenticateToken, restrictToManager, async (req, res) => {
   const { tenantId } = req.params;
+  const { error: validationError } = menuItemSchema.validate(req.body);
+  if (validationError) {
+    logger.error('Invalid menu item data:', { tenantId, error: validationError.message });
+    return res.status(400).json({ error: validationError.message });
+  }
   const { name, category, price, stock_quantity, low_stock_threshold } = req.body;
   if (req.user.tenantId !== tenantId) {
-    console.error('Unauthorized tenant access:', { tenantId, user: req.user });
+    logger.error('Unauthorized tenant access:', { tenantId, user: req.user });
     return res.status(403).json({ error: 'Unauthorized tenant' });
   }
 
-  console.log('Creating menu item:', { tenantId, name, category, price, stock_quantity, low_stock_threshold });
   try {
-    if (!name || !category || price === undefined || price < 0) {
-      console.error('Invalid menu item data:', { tenantId, name, category, price });
-      return res.status(400).json({ error: 'Name, category, and non-negative price are required' });
-    }
     const [result] = await pool.query(
       'INSERT INTO menu_items (tenant_id, name, category, price, stock_quantity, low_stock_threshold) VALUES (?, ?, ?, ?, ?, ?)',
       [tenantId, name, category, parseFloat(price), parseInt(stock_quantity || 0), parseInt(low_stock_threshold || 5)]
     );
-    console.log('Menu item created:', { tenantId, itemId: result.insertId });
     res.json({ success: true, itemId: result.insertId });
   } catch (error) {
-    console.error('Error creating menu item:', { error: error.message, tenantId });
-    res.status(500).json({ error: 'Failed to create menu item', details: error.message });
+    logger.error('Error creating menu item:', { error: error.message, tenantId });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
 // Update menu item (manager only)
 app.put('/api/tenants/:tenantId/menu-items/:itemId', authenticateToken, restrictToManager, async (req, res) => {
   const { tenantId, itemId } = req.params;
+  const { error: validationError } = menuItemSchema.validate(req.body);
+  if (validationError) {
+    logger.error('Invalid menu item data:', { tenantId, itemId, error: validationError.message });
+    return res.status(400).json({ error: validationError.message });
+  }
   const { name, category, price, stock_quantity, low_stock_threshold } = req.body;
   if (req.user.tenantId !== tenantId) {
-    console.error('Unauthorized tenant access:', { tenantId, user: req.user });
+    logger.error('Unauthorized tenant access:', { tenantId, user: req.user });
     return res.status(403).json({ error: 'Unauthorized tenant' });
   }
 
-  console.log('Updating menu item:', { tenantId, itemId, name, category, price, stock_quantity, low_stock_threshold });
   try {
-    if (!name || !category || price === undefined || price < 0) {
-      console.error('Invalid menu item data:', { tenantId, itemId, name, category, price });
-      return res.status(400).json({ error: 'Name, category, and non-negative price are required' });
-    }
     const [result] = await pool.query(
       'UPDATE menu_items SET name = ?, category = ?, price = ?, stock_quantity = ?, low_stock_threshold = ? WHERE item_id = ? AND tenant_id = ?',
       [name, category, parseFloat(price), parseInt(stock_quantity || 0), parseInt(low_stock_threshold || 5), parseInt(itemId), tenantId]
     );
     if (result.affectedRows === 0) {
-      console.error('Menu item not found or unauthorized:', { tenantId, itemId });
+      logger.error('Menu item not found or unauthorized:', { tenantId, itemId });
       return res.status(404).json({ error: 'Menu item not found or not authorized' });
     }
-    console.log('Menu item updated:', { tenantId, itemId });
     res.json({ success: true });
   } catch (error) {
-    console.error('Error updating menu item:', { error: error.message, tenantId, itemId });
-    res.status(500).json({ error: 'Failed to update menu item', details: error.message });
+    logger.error('Error updating menu item:', { error: error.message, tenantId, itemId });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -611,25 +760,23 @@ app.put('/api/tenants/:tenantId/menu-items/:itemId', authenticateToken, restrict
 app.delete('/api/tenants/:tenantId/menu-items/:itemId', authenticateToken, restrictToManager, async (req, res) => {
   const { tenantId, itemId } = req.params;
   if (req.user.tenantId !== tenantId) {
-    console.error('Unauthorized tenant access:', { tenantId, user: req.user });
+    logger.error('Unauthorized tenant access:', { tenantId, user: req.user });
     return res.status(403).json({ error: 'Unauthorized tenant' });
   }
 
-  console.log('Deleting menu item:', { tenantId, itemId });
   try {
     const [result] = await pool.query(
       'DELETE FROM menu_items WHERE item_id = ? AND tenant_id = ?',
       [parseInt(itemId), tenantId]
     );
     if (result.affectedRows === 0) {
-      console.error('Menu item not found or unauthorized:', { tenantId, itemId });
+      logger.error('Menu item not found or unauthorized:', { tenantId, itemId });
       return res.status(404).json({ error: 'Menu item not found or not authorized' });
     }
-    console.log('Menu item deleted:', { tenantId, itemId });
     res.json({ success: true });
   } catch (error) {
-    console.error('Error deleting menu item:', { error: error.message, tenantId, itemId });
-    res.status(500).json({ error: 'Failed to delete menu item', details: error.message });
+    logger.error('Error deleting menu item:', { error: error.message, tenantId, itemId });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -638,29 +785,27 @@ app.patch('/api/tenants/:tenantId/menu-items/:itemId/restock', authenticateToken
   const { tenantId, itemId } = req.params;
   const { quantity } = req.body;
   if (req.user.tenantId !== tenantId) {
-    console.error('Unauthorized tenant access:', { tenantId, user: req.user });
+    logger.error('Unauthorized tenant access:', { tenantId, user: req.user });
     return res.status(403).json({ error: 'Unauthorized tenant' });
   }
   if (!quantity || quantity < 0) {
-    console.error('Invalid restock quantity:', { tenantId, itemId, quantity });
+    logger.error('Invalid restock quantity:', { tenantId, itemId, quantity });
     return res.status(400).json({ error: 'Invalid restock quantity' });
   }
 
-  console.log('Restocking menu item:', { tenantId, itemId, quantity });
   try {
     const [result] = await pool.query(
       'UPDATE menu_items SET stock_quantity = stock_quantity + ? WHERE item_id = ? AND tenant_id = ?',
       [parseInt(quantity), parseInt(itemId), tenantId]
     );
     if (result.affectedRows === 0) {
-      console.error('Menu item not found or unauthorized:', { tenantId, itemId });
+      logger.error('Menu item not found or unauthorized:', { tenantId, itemId });
       return res.status(404).json({ error: 'Menu item not found or not authorized' });
     }
-    console.log('Menu item restocked:', { tenantId, itemId, quantity });
     res.json({ success: true });
   } catch (error) {
-    console.error('Error restocking menu item:', { error: error.message, tenantId, itemId });
-    res.status(500).json({ error: 'Failed to restock menu item', details: error.message });
+    logger.error('Error restocking menu item:', { error: error.message, tenantId, itemId });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -669,17 +814,14 @@ app.put('/api/tenants/:tenantId', authenticateToken, restrictToManager, upload.s
   const { tenantId } = req.params;
   const { name, primary_color } = req.body;
   if (req.user.tenantId !== tenantId) {
-    console.error('Unauthorized tenant access:', { tenantId, user: req.user });
+    logger.error('Unauthorized tenant access:', { tenantId, user: req.user });
     return res.status(403).json({ error: 'Unauthorized tenant' });
   }
-
-  console.log('Updating tenant settings:', { tenantId, name, primary_color, logo: req.file ? req.file.filename : 'none' });
 
   try {
     let logo_url = req.body.logo_url;
     if (req.file) {
       logo_url = `/Uploads/${req.file.filename}`;
-      console.log('Logo uploaded:', { tenantId, logo_url });
     }
 
     const [result] = await pool.query(
@@ -687,14 +829,13 @@ app.put('/api/tenants/:tenantId', authenticateToken, restrictToManager, upload.s
       [name || 'Default Tenant', logo_url || null, primary_color || '#1976d2', tenantId]
     );
     if (result.affectedRows === 0) {
-      console.error('Tenant not found:', { tenantId });
+      logger.error('Tenant not found:', { tenantId });
       return res.status(404).json({ error: 'Tenant not found' });
     }
-    console.log('Tenant settings updated:', { tenantId, logo_url });
     res.json({ success: true });
   } catch (error) {
-    console.error('Error updating tenant:', { error: error.message, tenantId });
-    res.status(500).json({ error: 'Failed to update tenant', details: error.message });
+    logger.error('Error updating tenant:', { error: error.message, tenantId });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -702,23 +843,29 @@ app.put('/api/tenants/:tenantId', authenticateToken, restrictToManager, upload.s
 app.get('/api/tenants/:tenantId/order-history', authenticateToken, restrictToManager, async (req, res) => {
   const { tenantId } = req.params;
   if (req.user.tenantId !== tenantId) {
-    console.error('Unauthorized tenant access:', { tenantId, user: req.user });
+    logger.error('Unauthorized tenant access:', { tenantId, user: req.user });
     return res.status(403).json({ error: 'Unauthorized tenant' });
   }
 
-  console.log('Fetching order history for tenant:', { tenantId });
   try {
     const [history] = await pool.query(
       'SELECT history_id, order_id, action, details, changed_by, change_timestamp FROM order_history WHERE tenant_id = ? ORDER BY change_timestamp DESC',
       [tenantId]
     );
     const formattedHistory = history.map(h => {
-      let parsedDetails;
-      try {
-        parsedDetails = JSON.parse(h.details);
-      } catch (error) {
-        console.error('Error parsing order history details:', { history_id: h.history_id, error: error.message });
-        parsedDetails = { items: [], error: 'Invalid JSON' };
+      let parsedDetails = { items: [] };
+      if (h.details) {
+        try {
+          // Validate JSON structure
+          const details = JSON.parse(h.details);
+          if (typeof details !== 'object' || details === null || !Array.isArray(details.items)) {
+            throw new Error('Invalid details format');
+          }
+          parsedDetails = details;
+        } catch (error) {
+          logger.error('Error parsing order history details:', { history_id: h.history_id, error: error.message });
+          parsedDetails = { items: [], error: 'Invalid JSON' };
+        }
       }
       return {
         history_id: h.history_id,
@@ -729,11 +876,10 @@ app.get('/api/tenants/:tenantId/order-history', authenticateToken, restrictToMan
         change_timestamp: h.change_timestamp,
       };
     });
-    console.log('Order history fetched:', { tenantId, count: formattedHistory.length });
     res.json(formattedHistory);
   } catch (error) {
-    console.error('Error fetching order history:', { error: error.message, tenantId });
-    res.status(500).json({ error: 'Failed to fetch order history', details: error.message });
+    logger.error('Error fetching order history:', { error: error.message, tenantId });
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -741,7 +887,7 @@ app.get('/api/tenants/:tenantId/order-history', authenticateToken, restrictToMan
 app.get('/api/tenants/:tenantId/analytics', authenticateToken, restrictToManager, async (req, res) => {
   const { tenantId } = req.params;
   if (req.user.tenantId !== tenantId) {
-    console.error('Unauthorized tenant access:', { tenantId, user: req.user });
+    logger.error('Unauthorized tenant access:', { tenantId, user: req.user });
     return res.status(403).json({ error: 'Unauthorized tenant' });
   }
 
@@ -755,11 +901,6 @@ app.get('/api/tenants/:tenantId/analytics', authenticateToken, restrictToManager
       'SELECT item_id, name, stock_quantity, low_stock_threshold FROM menu_items WHERE tenant_id = ? AND stock_quantity <= low_stock_threshold',
       [tenantId]
     );
-    console.log('Analytics query results:', {
-      tenantId,
-      orderStats: orderStats[0],
-      lowStockItemsCount: lowStockItems.length,
-    });
     res.json({
       totalOrders: parseInt(orderStats[0].totalOrders) || 0,
       totalRevenue: parseFloat(orderStats[0].totalRevenue) || 0,
@@ -771,8 +912,19 @@ app.get('/api/tenants/:tenantId/analytics', authenticateToken, restrictToManager
       })),
     });
   } catch (error) {
-    console.error('Error fetching analytics:', { error: error.message, tenantId });
-    res.status(500).json({ error: 'Failed to fetch analytics', details: error.message });
+    logger.error('Error fetching analytics:', { error: error.message, tenantId });
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Health check endpoint
+app.get('/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ status: 'ok', database: 'connected' });
+  } catch (error) {
+    logger.error('Health check failed:', { error: error.message });
+    res.status(500).json({ status: 'error', database: 'disconnected' });
   }
 });
 
@@ -783,8 +935,15 @@ app.use('/api/tenants/:tenantId', orderRoutes({
   restrictToManager,
   restrictToManagerKitchenOrRider,
   broadcastOrderNotification,
+  logger,
+  rateLimit
 }));
 
+// Centralized error handling middleware
+app.use((err, req, res, next) => {
+  logger.error('Unhandled error:', { error: err.message, path: req.path });
+  res.status(500).json({ error: 'Internal server error' });
+});
+
 // Start server
-app.listen(5000, () => console.log('Backend running on http://localhost:5000'));
-console.log('WebSocket server running on ws://localhost:8080');
+app.listen(PORT, () => console.log(`Backend running on http://localhost:${PORT}`));

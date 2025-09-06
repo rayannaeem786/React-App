@@ -19,7 +19,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import axios from 'axios';
 import { debounce } from 'lodash';
 
-// Custom styled components with enhanced animations (from Dashboard.js)
+// Custom styled components with enhanced animations
 const GradientCard = styled(motion(Card))(({ theme }) => ({
   background: `linear-gradient(135deg, ${alpha(theme.palette.primary.main, 0.08)} 0%, ${alpha(theme.palette.secondary.main, 0.08)} 100%)`,
   borderRadius: theme.shape.borderRadius * 3,
@@ -105,7 +105,7 @@ const StatusChip = styled(motion(Chip))(({ theme, status }) => {
   };
 });
 
-// Animation variants (from Dashboard.js)
+// Animation variants
 const fadeIn = {
   hidden: { opacity: 0, y: 20 },
   visible: { opacity: 1, y: 0, transition: { duration: 0.5 } }
@@ -132,7 +132,7 @@ function Customer() {
   const maxReconnectAttempts = 5;
   const reconnectDelay = useRef(1000); // Start with 1s delay
 
-  // Enhanced modern theme (from Dashboard.js)
+  // Enhanced modern theme
   const muiTheme = createTheme({
     palette: {
       primary: { main: tenant.primary_color || '#1976d2' },
@@ -212,7 +212,6 @@ function Customer() {
 
     const fetchTenant = async () => {
       try {
-        console.log('Fetching tenant from:', `http://localhost:5000/api/tenants/${tenantId}`);
         const response = await axios.get(`http://localhost:5000/api/tenants/${tenantId}`);
         setTenant({
           name: response.data.name || 'Unknown Tenant',
@@ -221,11 +220,6 @@ function Customer() {
         });
         setError('');
       } catch (error) {
-        console.error('Error fetching tenant:', {
-          message: error.message,
-          response: error.response?.data,
-          status: error.response?.status,
-        });
         const message = error.response?.data?.error || error.response?.status === 404
           ? 'Tenant not found. Please check the URL.'
           : 'Failed to load tenant data. Please try again.';
@@ -236,16 +230,10 @@ function Customer() {
     const fetchMenu = async () => {
       setLoading(true);
       try {
-        console.log('Fetching menu from:', `http://localhost:5000/api/tenants/${tenantId}/public/menu`);
         const response = await axios.get(`http://localhost:5000/api/tenants/${tenantId}/public/menu`);
         setMenuItems(Array.isArray(response.data) ? response.data : []);
         setError('');
       } catch (error) {
-        console.error('Error fetching menu:', {
-          message: error.message,
-          response: error.response?.data,
-          status: error.response?.status,
-        });
         const message = error.response?.data?.error || error.response?.status === 404
           ? 'Menu not found for this tenant.'
           : 'Failed to load menu. Please try again.';
@@ -264,17 +252,11 @@ function Customer() {
     if (orderStatus && !wsRef.current) {
       const refetchOrderStatus = async () => {
         try {
-          console.log('Refetching order status from:', `http://localhost:5000/api/tenants/${tenantId}/orders/${orderStatus.order_id}`);
           const response = await axios.get(
             `http://localhost:5000/api/tenants/${tenantId}/orders/${orderStatus.order_id}?customerPhone=${encodeURIComponent(orderStatus.customer_phone)}`
           );
           setOrderStatus(response.data);
         } catch (error) {
-          console.error('Error refetching order status:', {
-            message: error.message,
-            response: error.response?.data,
-            status: error.response?.status,
-          });
           setError(error.response?.data?.error || 'Failed to refetch order status.');
         }
       };
@@ -286,13 +268,11 @@ function Customer() {
   useEffect(() => {
     if (orderStatus) {
       const connectWebSocket = () => {
-        console.log('Connecting WebSocket to:', `ws://localhost:8080?tenantId=${tenantId}&orderId=${orderStatus.order_id}&customerPhone=${encodeURIComponent(orderStatus.customer_phone)}`);
         wsRef.current = new WebSocket(
           `ws://localhost:8080?tenantId=${tenantId}&orderId=${orderStatus.order_id}&customerPhone=${encodeURIComponent(orderStatus.customer_phone)}`
         );
 
         wsRef.current.onopen = () => {
-          console.log('Customer WebSocket connected');
           reconnectAttempts.current = 0;
           reconnectDelay.current = 1000; // Reset delay on successful connection
         };
@@ -300,7 +280,6 @@ function Customer() {
         wsRef.current.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
-            console.log('Customer WebSocket message received:', data);
             if (data.type === 'order_updated' && data.order.order_id === orderStatus.order_id) {
               setOrderStatus({
                 ...orderStatus,
@@ -313,16 +292,13 @@ function Customer() {
               });
             }
           } catch (err) {
-            console.error('Error parsing WebSocket message:', err);
             setError('Failed to process WebSocket update.');
           }
         };
 
         wsRef.current.onclose = () => {
-          console.log('Customer WebSocket closed');
           if (reconnectAttempts.current < maxReconnectAttempts) {
             setTimeout(() => {
-              console.log(`Attempting WebSocket reconnect (${reconnectAttempts.current + 1}/${maxReconnectAttempts})`);
               reconnectAttempts.current += 1;
               reconnectDelay.current = Math.min(reconnectDelay.current * 2, 16000); // Exponential backoff, max 16s
               connectWebSocket();
@@ -332,8 +308,7 @@ function Customer() {
           }
         };
 
-        wsRef.current.onerror = (error) => {
-          console.error('Customer WebSocket error:', error);
+        wsRef.current.onerror = () => {
           setError('WebSocket connection error. Retrying...');
         };
       };
@@ -416,7 +391,6 @@ function Customer() {
         setTimeout(() => setSuccess(''), 3000);
       },
       (error) => {
-        console.error('Geolocation error:', error);
         let errorMessage = 'Unable to retrieve location.';
         if (error.code === error.PERMISSION_DENIED) {
           errorMessage = 'Location access denied. Please allow location access to proceed.';
@@ -477,23 +451,22 @@ function Customer() {
         item_id: item.item_id,
         quantity: item.quantity,
         price: item.price,
-        name: item.name, // Include item name in the order data
+        name: item.name,
       })),
       customerName,
       customerPhone,
       is_delivery: isDelivery ? 1 : 0,
       customer_location: isDelivery ? customerLocation : null,
-      status: 'pending',
     };
+
+    delete orderData.status;
 
     setLoading(true);
     try {
-      console.log('Placing order with data:', orderData);
       const response = await axios.post(
         `http://localhost:5000/api/tenants/${tenantId}/public/orders`,
         orderData
       );
-      console.log('Order response:', response.data);
 
       const newOrderStatus = {
         order_id: response.data.orderId,
@@ -522,11 +495,6 @@ function Customer() {
       setError('');
       setTimeout(() => setSuccess(''), 5000);
     } catch (error) {
-      console.error('Error placing order:', {
-        message: error.message,
-        response: error.response?.data,
-        status: error.response?.status,
-      });
       const message = error.response?.data?.error || error.response?.status === 400
         ? 'Invalid order data. Please check your inputs.'
         : 'Failed to place order. Please try again.';
@@ -617,10 +585,12 @@ function Customer() {
           <GradientCard sx={{ mb: 4 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', p: 3 }}>
               <Avatar
-                src={tenant.logo_url ? `http://localhost:5000${tenant.logo_url}` : 'https://via.placeholder.com/40'}
+                src={tenant.logo_url ? `http://localhost:5000${tenant.logo_url}` : 'https://placehold.co/40x40'}
                 alt={tenant.name}
                 sx={{ width: 48, height: 48, mr: 2, boxShadow: '0 2px 8px rgba(0,0,0,0.1)' }}
-                onError={(e) => { e.target.src = 'https://via.placeholder.com/40'; }}
+                onError={(e) => {
+                  e.target.src = 'https://placehold.co/40x40';
+                }}
               />
               <Typography variant="h5" sx={{ fontWeight: 700 }}>
                 {tenant.name || `Welcome To ${tenantId}`}
