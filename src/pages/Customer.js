@@ -269,7 +269,7 @@ function Customer() {
     if (orderStatus) {
       const connectWebSocket = () => {
         wsRef.current = new WebSocket(
-          `ws://localhost:8080?tenantId=${tenantId}&orderId=${orderStatus.order_id}&customerPhone=${encodeURIComponent(orderStatus.customer_phone)}`
+          `wss://restaurant-backend-mmxx.onrender.com?tenantId=${tenantId}&orderId=${orderStatus.order_id}&customerPhone=${encodeURIComponent(orderStatus.customer_phone)}`
         );
 
         wsRef.current.onopen = () => {

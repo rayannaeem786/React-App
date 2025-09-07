@@ -190,7 +190,7 @@ function KitchenDisplay() {
         return;
       }
 
-      ws = new WebSocket(`ws://localhost:8080?tenantId=${tenantId}&token=${token}`);
+      ws = new WebSocket(`wss://restaurant-backend-mmxx.onrender.com?tenantId=${tenantId}&token=${token}`);
 
       ws.onopen = () => {
         console.log('WebSocket connected');
