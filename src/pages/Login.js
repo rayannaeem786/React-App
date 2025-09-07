@@ -145,8 +145,8 @@ function Login() {
     setLoading(true);
     setError('');
     try {
-const response = await axios.post('https://restaurant-backend-mmxx.onrender.com/api/login', {
-          tenantId: tenantId.trim() || undefined, // Send undefined if empty
+      const response = await axios.post('https://restaurant-backend-mmxx.onrender.com/api/login', {
+        tenantId: tenantId.trim() || undefined,
         username: username.trim(),
         password,
       });
@@ -169,8 +169,8 @@ const response = await axios.post('https://restaurant-backend-mmxx.onrender.com/
         setError('Invalid response from server');
       }
     } catch (error) {
-      console.error('Login error:', error.response?.data || error.message);
-      const errorMessage = error.response?.data?.error || 'Failed to connect to the server. Please try again.';
+      const errorMessage = error.response?.data?.error || error.message || 'Failed to connect to the server. Please try again.';
+      console.error('Login error:', { message: errorMessage, status: error.response?.status, data: error.response?.data });
       setError(errorMessage);
       localStorage.removeItem('token');
       localStorage.removeItem('tenantId');
@@ -221,7 +221,7 @@ const response = await axios.post('https://restaurant-backend-mmxx.onrender.com/
           <Paper elevation={0} sx={{ maxWidth: 400, width: '100%', zIndex: 1 }}>
             <Box sx={{ p: 4, textAlign: 'center' }}>
               <Avatar
-                src="https://via.placeholder.com/80?text=Logo" // Replace with actual logo
+                src="/logo.png" // Local asset
                 alt="Restaurant Logo"
                 sx={{
                   width: 80,
